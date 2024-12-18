@@ -4,16 +4,15 @@
   gather_facts: true
   become: true
   vars:
-    db_host: "localhost"
-    app_dir: /var/www/html/app-for-devops
-    mariadb_root_password: rootpass
-    db_name: lrv
-    db_user: lrv
-    db_pass: lrvpass
+    db_host: "{{ db_host | default('localhost') }}"
+    db_name: "{{ db_name | default('app_db') }}"
+    db_user: "{{ db_user | default('app_user') }}"
+    db_pass: "{{ db_pass | default('app_pass') }}"
+    mariadb_root_password: "rootpass"  # Локальный пароль для root
   tasks:
     - name: Install required packages
       apt:
-        name: 
+        name:
           - python3
           - python3-pip
           - mariadb-server
@@ -39,7 +38,7 @@
         - apache2
         - mariadb
 
-    - name: Configure MariaDB for password-based root login
+    - name: Configure MariaDB root user for password-based login
       block:
         - name: Check MariaDB root authentication plugin
           command: mysql -u root -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';"
@@ -55,32 +54,32 @@
             mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH 'mysql_native_password' BY '{{ mariadb_root_password }}'; FLUSH PRIVILEGES;"
           when: "'mysql_native_password' not in mariadb_auth_plugin.stdout"
 
-        - name: Create application database
-          mysql_db:
-            login_user: root
-            login_password: "{{ mariadb_root_password }}"
-            name: "{{ db_name }}"
-            state: present
+    - name: Create application database
+      mysql_db:
+        login_user: root
+        login_password: "{{ mariadb_root_password }}"
+        name: "{{ db_name }}"
+        state: present
 
-        - name: Create application user
-          mysql_user:
-            login_user: root
-            login_password: "{{ mariadb_root_password }}"
-            name: "{{ db_user }}"
-            password: "{{ db_pass }}"
-            priv: "{{ db_name }}.*:ALL"
-            host: "%"
-            state: present
+    - name: Create application user
+      mysql_user:
+        login_user: root
+        login_password: "{{ mariadb_root_password }}"
+        name: "{{ db_user }}"
+        password: "{{ db_pass }}"
+        priv: "{{ db_name }}.*:ALL"
+        host: "%"
+        state: present
 
     - name: Clone Laravel application
       git:
         repo: https://github.com/Practical-DevOps/app-for-devops.git
-        dest: "{{ app_dir }}"
+        dest: /var/www/html/app-for-devops
         force: yes
 
     - name: Set permissions for Laravel application
       file:
-        path: "{{ app_dir }}"
+        path: /var/www/html/app-for-devops
         state: directory
         owner: www-data
         group: www-data
@@ -89,7 +88,7 @@
 
     - name: Configure .env file
       lineinfile:
-        path: "{{ app_dir }}/.env"
+        path: /var/www/html/app-for-devops/.env
         regexp: "^{{ item.key }}="
         line: "{{ item.key }}={{ item.value }}"
         create: yes
@@ -102,10 +101,12 @@
     - name: Install Laravel dependencies using Composer
       command: composer install
       args:
-        chdir: "{{ app_dir }}"
-      register: composer_output
+        chdir: /var/www/html/app-for-devops
 
     - name: Run Laravel migrations
       command: php artisan migrate --force
+      args:
+        chdir: /var/www/html/app-for-devops
+
       args:
         chdir: "{{ app_dir }}"
