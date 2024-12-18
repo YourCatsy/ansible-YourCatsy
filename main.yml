@@ -1,23 +1,82 @@
 ---
-- name: Install and configure Laravel dependencies
+- name: Install and configure Apache with Laravel and MariaDB
   hosts: all
   gather_facts: false
+  become: true
+  tasks:
+    - name: Ensure Python is installed
+      become: true
+      apt:
+        name: python3
+        state: present
+
+- name: Configure Database Server
+  hosts: db
+  become: true
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  tasks:
+    - name: Install MariaDB
+      apt:
+        name: mariadb-server
+        state: present
+
+    - name: Install Python MySQL dependencies (PyMySQL)
+      apt:
+        name: python3-pymysql
+        state: present
+
+    - name: Ensure MariaDB is running
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Create database
+      mysql_db:
+        name: "{{ db_name }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Create database user with privileges
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_pass }}"
+        priv: "{{ db_name }}.*:ALL"
+        host: "%"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+
+- name: Configure Web Server
+  hosts: server
   become: true
   vars:
     app_dir: /var/www/html/app-for-devops
   tasks:
-    - name: Install required packages
+    - name: Install Apache and PHP dependencies
       apt:
         name:
+          - apache2
           - php
           - php-mysql
           - unzip
           - curl
+          - php-xml
+          - php-cli
+          - php-mbstring
           - composer
-          - mariadb-client
           - nodejs
           - npm
         state: present
+      become: true
+
+    - name: Ensure Apache is running
+      service:
+        name: apache2
+        state: started
+        enabled: yes
+
+    - name: Add /var/www/html/app-for-devops to Git safe directory
+      command: git config --global --add safe.directory /var/www/html/app-for-devops
 
     - name: Clone Laravel application
       git:
@@ -51,11 +110,65 @@
         - { key: 'DB_USERNAME', value: '{{ db_user }}' }
         - { key: 'DB_PASSWORD', value: '{{ db_pass }}' }
 
+    - name: Set proper permissions for .env
+      file:
+        path: "{{ app_dir }}/.env"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+
+    - name: Install Node.js from NodeSource
+      become: true
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
+        apt-get install -y nodejs
+
+    - name: Ensure /var/tmp exists with correct permissions
+      file:
+        path: /var/tmp
+        state: directory
+        mode: '1777'
+
+    - name: Build frontend assets with Vite
+      shell: npm run build --unsafe-perm
+      args:
+        chdir: "{{ app_dir }}"
+      environment:
+        TMPDIR: "/var/tmp"
+      become: true
+
     - name: Install Laravel dependencies using Composer
       command: composer install
       args:
         chdir: "{{ app_dir }}"
         creates: "{{ app_dir }}/vendor/autoload.php"
+
+    - name: Enable Apache mod_rewrite
+      become: true
+      command: a2enmod rewrite
+
+    - name: Create Apache virtual host configuration for Laravel
+      copy:
+        dest: /etc/apache2/sites-available/laravel.conf
+        content: |
+          <VirtualHost *:80>
+              DocumentRoot /var/www/html/app-for-devops/public
+              ServerName localhost
+              <Directory /var/www/html/app-for-devops/public>
+                  AllowOverride All
+                  Require all granted
+              </Directory>
+              ErrorLog ${APACHE_LOG_DIR}/error.log
+              CustomLog ${APACHE_LOG_DIR}/access.log combined
+          </VirtualHost>
+
+    - name: Enable Laravel site configuration
+      command: a2ensite laravel.conf
+
+    - name: Restart Apache to apply changes
+      service:
+        name: apache2
+        state: restarted
 
     - name: Generate Laravel application key
       command: php artisan key:generate
@@ -66,3 +179,4 @@
       command: php artisan migrate --force
       args:
         chdir: "{{ app_dir }}"
+
