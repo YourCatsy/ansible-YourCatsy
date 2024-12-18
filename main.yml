@@ -6,10 +6,10 @@
   vars:
     db_host: "localhost"
     app_dir: /var/www/html/app-for-devops
-    mariadb_root_password: rootpass  # Change as needed
+    mariadb_root_password: rootpass  # Установите пароль root
     db_name: lrv
     db_user: lrv
-    db_pass: lrvpass  # Change as needed
+    db_pass: lrvpass  # Установите пароль пользователя базы данных
   tasks:
     - name: Install required packages
       apt:
@@ -39,14 +39,26 @@
         - apache2
         - mariadb
 
-    - name: Secure MariaDB installation
+    - name: Configure MariaDB root user for password-based login
+      command: |
+        mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH 'mysql_native_password' BY '{{ mariadb_root_password }}'; FLUSH PRIVILEGES;"
+      ignore_errors: yes
+
+    - name: Create application database and user
       mysql_user:
         login_user: root
         login_password: "{{ mariadb_root_password }}"
         name: "{{ db_user }}"
         password: "{{ db_pass }}"
-        host: "{{ db_host }}"
         priv: "{{ db_name }}.*:ALL"
+        host: "%"
+        state: present
+
+    - name: Create application database
+      mysql_db:
+        login_user: root
+        login_password: "{{ mariadb_root_password }}"
+        name: "{{ db_name }}"
         state: present
 
     - name: Clone Laravel application
